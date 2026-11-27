@@ -186,12 +186,27 @@ impl GrantKinoa {
         self.mark_saved();
     }
 
+    /// Serialización canónica: ignora las entradas vacías que la UI crea al dibujar.
+    fn snapshot(&self) -> String {
+        let mut p = self.project.clone();
+        for pat in &mut p.patterns {
+            for cp in pat.channels.values_mut() {
+                while cp.steps.last() == Some(&false) {
+                    cp.steps.pop();
+                }
+            }
+            pat.channels
+                .retain(|_, cp| !cp.steps.is_empty() || !cp.notes.is_empty());
+        }
+        serde_json::to_string(&p).unwrap_or_default()
+    }
+
     fn mark_saved(&mut self) {
-        self.saved = serde_json::to_string(&self.project).unwrap_or_default();
+        self.saved = self.snapshot();
     }
 
     fn is_dirty(&self) -> bool {
-        serde_json::to_string(&self.project).is_ok_and(|s| s != self.saved)
+        self.snapshot() != self.saved
     }
 
     fn guard(&mut self, action: Pending) {
