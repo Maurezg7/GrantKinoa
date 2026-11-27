@@ -155,6 +155,12 @@ impl GrantKinoa {
         self.audio.send(Cmd::CurrentPattern(self.pattern));
     }
 
+    fn release_midi(&mut self) {
+        for (key, ch) in std::mem::take(&mut self.midi_notes) {
+            self.audio.send(Cmd::NoteOff { ch, key });
+        }
+    }
+
     fn poll_midi(&mut self) {
         let events: Vec<MidiEvent> = self.midi.rx.try_iter().collect();
         for e in events {
@@ -595,12 +601,14 @@ impl GrantKinoa {
                     }
                 }
                 if let Some(p) = pick {
+                    self.release_midi();
                     self.status = match self.midi.connect(&p, self.ctx.clone()) {
                         Ok(()) => format!("MIDI conectado: {p}"),
                         Err(e) => format!("No se pudo conectar MIDI: {e}"),
                     };
                 }
                 if self.midi.port.is_some() && ui.button("Desconectar").clicked() {
+                    self.release_midi();
                     self.midi.disconnect();
                 }
             });
