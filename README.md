@@ -11,7 +11,10 @@ DAW gratuito y de código abierto estilo FL Studio, hecho en Rust para Linux y W
 - **Playlist**: arreglo de patterns en 16 pistas, mover clips, posicionar la reproducción desde la regla.
 - **Modos Pattern / Song** como en FL Studio.
 - **Instrumentos**: bombo, caja, hi-hat cerrado/abierto, palmas (sintetizados), synth sustractivo de 3 osciladores con ADSR y filtro resonante (presets Bajo, Pluck, Pad, Lead) y sampler de WAV.
-- **Mixer**: master + 8 inserts con volumen, paneo, mute, vúmetros y efectos (filtro, delay ping-pong, reverb).
+- **Plugins de instrumento**: Kinoa 808 (glide y saturación), Kinoa Keys (piano eléctrico FM con trémolo), Kinoa Supersaw, Kinoa Strings, Kinoa Organ (drawbars + rotativo), Kinoa Guitar (modelado físico con distorsión) y percusión extra (rimshot, shaker, tom).
+- **Mixer**: master + 8 inserts con volumen, paneo, mute, vúmetros y cadena de efectos: EQ de 3 bandas, compresor, sidechain (ducking) desde otro insert, saturador, bitcrusher, chorus, phaser, filtro, delay ping-pong, reverb y limitador.
+- **Plantillas por género** (Archivo → Nuevo desde plantilla): hip hop, trap, R&B, pop, pop-rock, reggaetón y reggae, con kits, acordes, bajo y mezcla listos.
+- **Swing** global y **teclado MIDI externo** (menú MIDI) para tocar el canal seleccionado.
 - **Proyectos** `.gkp` (JSON) para guardar/abrir y **exportación a WAV** 44.1 kHz.
 
 ## Atajos
