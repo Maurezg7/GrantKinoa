@@ -769,6 +769,10 @@ fn adsr(v: &mut Voice, t: f32, sr: f32, a: f32, d: f32, s: f32, r: f32) -> f32 {
     env
 }
 
+fn midi_hz(k: f32) -> f32 {
+    440.0 * 2f32.powf((k - 69.0) / 12.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -814,8 +818,4 @@ mod tests {
         e.render(&mut buf);
         assert!(rms(&buf[buf.len() - 4410..]) < 1e-3);
     }
-}
-
-fn midi_hz(k: f32) -> f32 {
-    440.0 * 2f32.powf((k - 69.0) / 12.0)
 }

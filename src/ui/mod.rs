@@ -8,6 +8,7 @@ pub mod widgets;
 use crate::audio::Audio;
 use crate::engine::{Cmd, PlayMode, SampleData};
 use crate::export;
+use crate::midi::{Midi, MidiEvent};
 use crate::project::*;
 use crate::templates::Genre;
 use crossbeam_channel::Receiver;
@@ -68,6 +69,9 @@ pub struct GrantKinoa {
     after_save: Option<Pending>,
     quit_ok: bool,
     ctx: Context,
+    midi: Midi,
+    midi_ports: Vec<String>,
+    midi_notes: HashMap<u8, u32>,
 }
 
 impl GrantKinoa {
@@ -108,9 +112,20 @@ impl GrantKinoa {
             after_save: None,
             quit_ok: false,
             ctx: cc.egui_ctx.clone(),
+            midi: Midi::new(),
+            midi_ports: Midi::ports(),
+            midi_notes: HashMap::new(),
         };
         if let Some(p) = open {
             app.open_project(&p);
+        }
+        if let Some(port) = app
+            .midi_ports
+            .iter()
+            .find(|p| !p.to_lowercase().contains("through"))
+            .cloned()
+        {
+            let _ = app.midi.connect(&port, cc.egui_ctx.clone());
         }
         app.mark_saved();
         app
@@ -138,6 +153,25 @@ impl GrantKinoa {
     fn set_pattern(&mut self, idx: usize) {
         self.pattern = idx.min(self.project.patterns.len() - 1);
         self.audio.send(Cmd::CurrentPattern(self.pattern));
+    }
+
+    fn poll_midi(&mut self) {
+        let events: Vec<MidiEvent> = self.midi.rx.try_iter().collect();
+        for e in events {
+            match e {
+                MidiEvent::On(key, vel) => {
+                    let Some(ch) = self.selected else { continue };
+                    self.sync();
+                    self.audio.send(Cmd::NoteOn { ch, key, vel });
+                    self.midi_notes.insert(key, ch);
+                }
+                MidiEvent::Off(key) => {
+                    if let Some(ch) = self.midi_notes.remove(&key) {
+                        self.audio.send(Cmd::NoteOff { ch, key });
+                    }
+                }
+            }
+        }
     }
 
     fn note_on(&mut self, ch: u32, key: u8) {
@@ -546,6 +580,30 @@ impl GrantKinoa {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
+            ui.menu_button("MIDI", |ui| {
+                if ui.button("Buscar dispositivos").clicked() {
+                    self.midi_ports = Midi::ports();
+                }
+                if self.midi_ports.is_empty() {
+                    ui.label(RichText::new("No hay teclados MIDI").color(TEXT_DIM));
+                }
+                let mut pick = None;
+                for p in &self.midi_ports {
+                    let on = self.midi.port.as_deref() == Some(p.as_str());
+                    if ui.selectable_label(on, p).clicked() {
+                        pick = Some(p.clone());
+                    }
+                }
+                if let Some(p) = pick {
+                    self.status = match self.midi.connect(&p, self.ctx.clone()) {
+                        Ok(()) => format!("MIDI conectado: {p}"),
+                        Err(e) => format!("No se pudo conectar MIDI: {e}"),
+                    };
+                }
+                if self.midi.port.is_some() && ui.button("Desconectar").clicked() {
+                    self.midi.disconnect();
+                }
+            });
             ui.menu_button("Ver", |ui| {
                 ui.checkbox(&mut self.show_browser, "Navegador   F5");
                 ui.checkbox(&mut self.show_rack, "Channel Rack   F6");
@@ -792,6 +850,7 @@ impl eframe::App for GrantKinoa {
             self.pending = Some(Pending::Quit);
         }
         self.unsaved_modal(&ctx);
+        self.poll_midi();
         self.handle_keys(&ctx);
         self.poll_export();
         for (i, m) in self.meters.iter_mut().enumerate() {
