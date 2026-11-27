@@ -531,31 +531,6 @@ impl Project {
     }
 
     pub fn add_pattern(&mut self) -> usize {
-        for p in &mut self.patterns {
-            p.length = p.length.clamp(1, MAX_PATTERN_STEPS);
-            let len = p.length as usize;
-            for cp in p.channels.values_mut() {
-                cp.steps.resize(len, false);
-                cp.notes.retain(|n| {
-                    n.start.is_finite()
-                        && n.len.is_finite()
-                        && n.start >= 0.0
-                        && n.start < len as f32
-                });
-                for n in &mut cp.notes {
-                    n.len = n.len.clamp(0.25, len as f32 - n.start);
-                    n.key = n.key.min(127);
-                    n.vel = if n.vel.is_finite() {
-                        n.vel.clamp(0.0, 1.0)
-                    } else {
-                        0.8
-                    };
-                }
-            }
-        }
-        for c in &mut self.clips {
-            c.start = c.start.min(MAX_SONG_STEPS);
-        }
         let n = self.patterns.len();
         self.patterns.push(Pattern::new(
             format!("Pattern {}", n + 1),
@@ -601,6 +576,34 @@ impl Project {
         }
         if self.patterns.is_empty() {
             self.patterns.push(Pattern::new("Pattern 1", PALETTE[0]));
+        }
+        for p in &mut self.patterns {
+            p.length = p.length.clamp(1, MAX_PATTERN_STEPS);
+            let len = p.length as usize;
+            for cp in p.channels.values_mut() {
+                if cp.steps.len() < len {
+                    cp.steps.resize(len, false);
+                }
+                cp.steps.truncate(MAX_PATTERN_STEPS as usize);
+                cp.notes.retain(|n| {
+                    n.start.is_finite()
+                        && n.len.is_finite()
+                        && n.start >= 0.0
+                        && n.start < MAX_PATTERN_STEPS as f32
+                });
+                for n in &mut cp.notes {
+                    n.len = n.len.clamp(0.25, (MAX_PATTERN_STEPS as f32 - n.start).max(0.25));
+                    n.key = n.key.min(127);
+                    n.vel = if n.vel.is_finite() {
+                        n.vel.clamp(0.0, 1.0)
+                    } else {
+                        0.8
+                    };
+                }
+            }
+        }
+        for c in &mut self.clips {
+            c.start = c.start.min(MAX_SONG_STEPS);
         }
         let n = self.patterns.len();
         self.clips
