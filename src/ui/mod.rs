@@ -634,7 +634,7 @@ impl GrantKinoa {
     }
 
     fn transport(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(
                 RichText::new("GrantKinoa")
                     .strong()

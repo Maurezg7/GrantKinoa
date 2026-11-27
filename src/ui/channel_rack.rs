@@ -62,8 +62,9 @@ impl GrantKinoa {
         });
         ui.separator();
         let mut action = None;
-        egui::ScrollArea::vertical()
+        egui::ScrollArea::both()
             .max_height(420.0)
+            .max_width(ui.ctx().content_rect().width() - 280.0)
             .show(ui, |ui| {
                 let ids: Vec<u32> = self.project.channels.iter().map(|c| c.id).collect();
                 for id in ids {
