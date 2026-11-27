@@ -63,6 +63,7 @@ pub struct GrantKinoa {
     export_rx: Option<Receiver<Result<PathBuf, String>>>,
     saved: String,
     pending: Option<Pending>,
+    after_save: Option<Pending>,
     quit_ok: bool,
     ctx: Context,
 }
@@ -102,6 +103,7 @@ impl GrantKinoa {
             export_rx: None,
             saved: String::new(),
             pending: None,
+            after_save: None,
             quit_ok: false,
             ctx: cc.egui_ctx.clone(),
         };
@@ -255,9 +257,14 @@ impl GrantKinoa {
         match choice {
             Some(0) => {
                 self.pending = None;
-                self.save();
-                if !self.is_dirty() {
-                    self.run_pending(action);
+                if self.path.is_none() {
+                    self.save();
+                    self.after_save = Some(action);
+                } else {
+                    self.save();
+                    if !self.is_dirty() {
+                        self.run_pending(action);
+                    }
                 }
             }
             Some(1) => {
@@ -292,8 +299,14 @@ impl GrantKinoa {
                 self.status = format!("Guardado {}", path.display());
                 self.path = Some(path);
                 self.mark_saved();
+                if let Some(a) = self.after_save.take() {
+                    self.run_pending(a);
+                }
             }
-            Err(e) => self.status = format!("No se pudo guardar: {e}"),
+            Err(e) => {
+                self.after_save = None;
+                self.status = format!("No se pudo guardar: {e}");
+            }
         }
     }
 
@@ -338,6 +351,9 @@ impl GrantKinoa {
     }
 
     fn open_dialog(&mut self, purpose: DialogPurpose) {
+        if !matches!(purpose, DialogPurpose::Save) {
+            self.after_save = None;
+        }
         let mut d = FileDialog::new();
         d = match purpose {
             DialogPurpose::Open => d
@@ -365,6 +381,12 @@ impl GrantKinoa {
 
     fn handle_dialog(&mut self, ctx: &Context) {
         self.dialog.update(ctx);
+        if matches!(
+            self.dialog.state(),
+            egui_file_dialog::DialogState::Cancelled
+        ) {
+            self.after_save = None;
+        }
         if let Some(path) = self.dialog.take_picked() {
             match self.purpose.take() {
                 Some(DialogPurpose::Open) => self.open_project(&path),

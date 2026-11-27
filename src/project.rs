@@ -592,7 +592,9 @@ impl Project {
                         && n.start < MAX_PATTERN_STEPS as f32
                 });
                 for n in &mut cp.notes {
-                    n.len = n.len.clamp(0.25, (MAX_PATTERN_STEPS as f32 - n.start).max(0.25));
+                    n.len = n
+                        .len
+                        .clamp(0.25, (MAX_PATTERN_STEPS as f32 - n.start).max(0.25));
                     n.key = n.key.min(127);
                     n.vel = if n.vel.is_finite() {
                         n.vel.clamp(0.0, 1.0)
