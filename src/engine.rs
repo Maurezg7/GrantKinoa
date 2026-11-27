@@ -91,6 +91,7 @@ struct Voice {
     glide_from: f32,
     buf: Vec<f32>,
     bidx: usize,
+    ks: [f32; 4],
     rng: Rng,
     spos: f64,
     done: bool,
@@ -248,7 +249,11 @@ impl Engine {
                 self.sr,
             ),
             InstrumentKind::Clap => filt.set(1100.0 * r, 0.45, self.sr),
-            InstrumentKind::Shaker => filt.set(7500.0 * r, 0.3, self.sr),
+            InstrumentKind::Shaker => filt.set(
+                (5000.0 + 5000.0 * channel.instrument.drum.tone) * r,
+                0.3,
+                self.sr,
+            ),
             _ => {}
         }
         let tone = &channel.instrument.tone;
@@ -279,8 +284,14 @@ impl Engine {
             }
         }
         let mut buf = Vec::new();
+        let mut ks = [0.0; 4];
         if kind == InstrumentKind::Guitar {
-            let n = (self.sr / midi_hz(key as f32)).round().max(2.0) as usize;
+            let a = 0.5 - 0.4 * tone.bright;
+            let period = self.sr / midi_hz(key as f32) - a;
+            let n = (period - 0.1).floor().max(2.0);
+            let d = (period - n).max(0.0);
+            ks = [(1.0 - d) / (1.0 + d), 0.0, 0.0, a];
+            let n = n as usize;
             buf = (0..n).map(|_| rng.next()).collect();
             let passes = ((1.0 - tone.bright) * 4.0) as usize;
             for _ in 0..passes {
@@ -308,6 +319,7 @@ impl Engine {
             glide_from,
             buf,
             bidx: 0,
+            ks,
             rng,
             spos: 0.0,
             done: false,
@@ -361,10 +373,12 @@ impl Engine {
         let len = p.length as f64;
         let swing = project.swing.clamp(0.0, 0.75) as f64 * 0.5;
         let swung = |s: f64| {
-            if s.fract() == 0.0 && (s as u64) % 2 == 1 {
-                s + swing
+            let k = (s / 2.0).floor() * 2.0;
+            let f = s - k;
+            if f < 1.0 {
+                k + f * (1.0 + swing)
             } else {
-                s
+                k + 1.0 + swing + (f - 1.0) * (1.0 - swing)
             }
         };
         for (&ch, cp) in &p.channels {
@@ -555,17 +569,28 @@ fn render_voice(
     let mono = match v.kind {
         InstrumentKind::Rim => {
             let e = (-t / (0.025 * d)).exp();
-            ((TAU * 1700.0 * r * t).sin() * 0.6 + (TAU * 480.0 * r * t).sin() * 0.5) * e * 0.6
+            if e < 1e-4 {
+                v.done = true;
+            }
+            let f = r * (0.75 + 0.5 * tone);
+            ((TAU * 1700.0 * f * t).sin() * 0.6 + (TAU * 480.0 * f * t).sin() * 0.5) * e * 0.6
         }
         InstrumentKind::Shaker => {
             let n = v.rng.next();
             let e = (t / 0.006).min(1.0) * (-t / (0.06 * d)).exp();
+            if t > 0.006 && e < 1e-4 {
+                v.done = true;
+            }
             v.filt.process(n).band * e * 1.2
         }
         InstrumentKind::Tom => {
             let f = r * (110.0 + 60.0 * tone) * (1.0 + 0.6 * (-t / 0.04).exp());
             v.phases[0] = (v.phases[0] + f / sr).fract();
-            (TAU * v.phases[0]).sin() * (-t / (0.35 * d)).exp() * 0.9
+            let e = (-t / (0.35 * d)).exp();
+            if e < 1e-4 {
+                v.done = true;
+            }
+            (TAU * v.phases[0]).sin() * e * 0.9
         }
         InstrumentKind::Bass808 => {
             let env = adsr(v, t, sr, p.attack, p.decay, p.sustain, p.release);
@@ -646,9 +671,13 @@ fn render_voice(
             let i = v.bidx;
             let j = (i + 1) % n;
             let fb = 0.99 + 0.0095 * (p.decay / 4.0).min(1.0);
-            let a = 0.5 - 0.4 * p.bright;
+            let [c, x1, y1, a] = v.ks;
             let y = v.buf[i];
-            v.buf[i] = fb * ((1.0 - a) * v.buf[i] + a * v.buf[j]);
+            let lp = (1.0 - a) * v.buf[i] + a * v.buf[j];
+            let ap = c * lp + x1 - c * y1;
+            v.ks[1] = lp;
+            v.ks[2] = ap;
+            v.buf[i] = fb * ap;
             v.bidx = j;
             if t > 12.0 {
                 v.done = true;
