@@ -4,6 +4,7 @@ mod audio;
 mod dsp;
 mod engine;
 mod export;
+mod plugins;
 mod project;
 mod ui;
 

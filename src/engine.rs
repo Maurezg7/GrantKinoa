@@ -1,6 +1,8 @@
 use crate::dsp::{self, Delay, Reverb, Rng, Svf};
+use crate::plugins::{self, Chorus, Compressor, Crusher, Eq3, Follower, Limiter, Phaser};
 use crate::project::{DEFAULT_KEY, InstrumentKind, MIXER_INSERTS, Project};
 use std::collections::HashMap;
+use std::f32::consts::TAU;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -82,8 +84,13 @@ struct Voice {
     rel_t: u32,
     rel_level: f32,
     env: f32,
-    phases: [f32; 3],
+    phases: [f32; 8],
     filt: Svf,
+    filt2: Svf,
+    pitch: f32,
+    glide_from: f32,
+    buf: Vec<f32>,
+    bidx: usize,
     rng: Rng,
     spos: f64,
     done: bool,
@@ -93,6 +100,13 @@ struct Insert {
     lp: [Svf; 2],
     delay: Delay,
     reverb: Reverb,
+    eq: Eq3,
+    comp: Compressor,
+    crush: Crusher,
+    chorus: Chorus,
+    phaser: Phaser,
+    limiter: Limiter,
+    sidechain: Follower,
 }
 
 pub struct Engine {
@@ -123,6 +137,13 @@ impl Engine {
                     lp: [Svf::default(); 2],
                     delay: Delay::new(sr),
                     reverb: Reverb::new(sr),
+                    eq: Eq3::default(),
+                    comp: Compressor::default(),
+                    crush: Crusher::default(),
+                    chorus: Chorus::new(sr),
+                    phaser: Phaser::default(),
+                    limiter: Limiter::default(),
+                    sidechain: Follower::default(),
                 })
                 .collect(),
             buses: vec![[0.0; 2]; (MIXER_INSERTS + 1) * BLOCK],
@@ -227,7 +248,46 @@ impl Engine {
                 self.sr,
             ),
             InstrumentKind::Clap => filt.set(1100.0 * r, 0.45, self.sr),
+            InstrumentKind::Shaker => filt.set(7500.0 * r, 0.3, self.sr),
             _ => {}
+        }
+        let tone = &channel.instrument.tone;
+        let mut rng = Rng::new(self.seed);
+        let mut phases = [0.0; 8];
+        let mut filt2 = Svf::default();
+        if matches!(kind, InstrumentKind::Supersaw | InstrumentKind::Strings) {
+            for p in &mut phases {
+                *p = rng.next() * 0.5 + 0.5;
+            }
+            let c = 300.0 + tone.bright * tone.bright * 14000.0;
+            filt.set(c, 0.15, self.sr);
+            filt2.set(c, 0.15, self.sr);
+        }
+        let mut glide_from = key as f32;
+        if kind == InstrumentKind::Bass808 {
+            if let Some(prev) = self
+                .voices
+                .iter_mut()
+                .rev()
+                .find(|v| v.ch == ch && !v.done && !v.released)
+                && tone.glide > 0.001
+            {
+                glide_from = prev.pitch;
+            }
+            for v in self.voices.iter_mut().filter(|v| v.ch == ch) {
+                v.done = true;
+            }
+        }
+        let mut buf = Vec::new();
+        if kind == InstrumentKind::Guitar {
+            let n = (self.sr / midi_hz(key as f32)).round().max(2.0) as usize;
+            buf = (0..n).map(|_| rng.next()).collect();
+            let passes = ((1.0 - tone.bright) * 4.0) as usize;
+            for _ in 0..passes {
+                for i in 0..n {
+                    buf[i] = (buf[i] + buf[(i + 1) % n]) * 0.5;
+                }
+            }
         }
         self.voices.push(Voice {
             ch,
@@ -241,9 +301,14 @@ impl Engine {
             rel_t: 0,
             rel_level: 0.0,
             env: 0.0,
-            phases: [0.0; 3],
+            phases,
             filt,
-            rng: Rng::new(self.seed),
+            filt2,
+            pitch: key as f32,
+            glide_from,
+            buf,
+            bidx: 0,
+            rng,
             spos: 0.0,
             done: false,
         });
@@ -294,16 +359,25 @@ impl Engine {
             return;
         };
         let len = p.length as f64;
+        let swing = project.swing.clamp(0.0, 0.75) as f64 * 0.5;
+        let swung = |s: f64| {
+            if s.fract() == 0.0 && (s as u64) % 2 == 1 {
+                s + swing
+            } else {
+                s
+            }
+        };
         for (&ch, cp) in &p.channels {
-            let mut i = from.ceil() as usize;
+            let mut i = (from - 1.0).max(0.0).ceil() as usize;
             while (i as f64) < to && (i as f64) < len {
-                if cp.steps.get(i).copied().unwrap_or(false) {
+                let s = swung(i as f64);
+                if s >= from && s < to && cp.steps.get(i).copied().unwrap_or(false) {
                     self.trigger(ch, DEFAULT_KEY, 0.8, Some(1.0));
                 }
                 i += 1;
             }
             for n in &cp.notes {
-                let s = n.start as f64;
+                let s = swung(n.start as f64);
                 if s >= from && s < to && s < len {
                     self.trigger(ch, n.key, n.vel, Some(n.len as f64));
                 }
@@ -370,8 +444,47 @@ impl Engine {
                 dsp::pan_gains(mt.volume, mt.pan)
             };
             let mut peak = [0.0f32; 2];
+            let sc = (fx.sc_source > 0 && fx.sc_source != track).then_some(fx.sc_source);
             for i in 0..n {
                 let mut x = self.buses[track * BLOCK + i];
+                if fx.eq_on {
+                    x = ins.eq.process(x, fx.eq, sr);
+                }
+                if fx.sat_on {
+                    x = x.map(|v| plugins::saturate(v, fx.sat_drive));
+                }
+                if fx.crush_on {
+                    x = ins.crush.process(x, fx.crush_bits, fx.crush_down);
+                }
+                if fx.comp_on {
+                    x = ins.comp.process(
+                        x,
+                        fx.comp_thresh,
+                        fx.comp_ratio,
+                        fx.comp_attack,
+                        fx.comp_release,
+                        fx.comp_makeup,
+                        sr,
+                    );
+                }
+                if let Some(src) = sc {
+                    let k = self.buses[src * BLOCK + i];
+                    let e = ins
+                        .sidechain
+                        .process(k[0].abs().max(k[1].abs()), 1.0, 160.0, sr);
+                    let g = 1.0 - fx.sc_depth.clamp(0.0, 1.0) * (e * 3.0).min(1.0);
+                    x = [x[0] * g, x[1] * g];
+                }
+                if fx.chorus_on {
+                    x = ins
+                        .chorus
+                        .process(x, fx.chorus_rate, fx.chorus_depth, fx.chorus_mix, sr);
+                }
+                if fx.phaser_on {
+                    x = ins
+                        .phaser
+                        .process(x, fx.phaser_rate, fx.phaser_depth, fx.phaser_mix, sr);
+                }
                 if fx.filter_on {
                     x = [ins.lp[0].process(x[0]).low, ins.lp[1].process(x[1]).low];
                 }
@@ -389,6 +502,9 @@ impl Engine {
                     ];
                 }
                 x = [x[0] * gains[0], x[1] * gains[1]];
+                if fx.limiter_on {
+                    x = ins.limiter.process(x, fx.limiter_ceiling, sr);
+                }
                 if track == 0 {
                     x = [soft_clip(x[0]), soft_clip(x[1])];
                     out[i * 2] = x[0];
@@ -435,7 +551,111 @@ fn render_voice(
     let d = inst.drum.decay.max(0.05);
     let tone = inst.drum.tone;
     let r = 2f32.powf((inst.drum.tune + v.key as f32 - DEFAULT_KEY as f32) / 12.0);
+    let p = &inst.tone;
     let mono = match v.kind {
+        InstrumentKind::Rim => {
+            let e = (-t / (0.025 * d)).exp();
+            ((TAU * 1700.0 * r * t).sin() * 0.6 + (TAU * 480.0 * r * t).sin() * 0.5) * e * 0.6
+        }
+        InstrumentKind::Shaker => {
+            let n = v.rng.next();
+            let e = (t / 0.006).min(1.0) * (-t / (0.06 * d)).exp();
+            v.filt.process(n).band * e * 1.2
+        }
+        InstrumentKind::Tom => {
+            let f = r * (110.0 + 60.0 * tone) * (1.0 + 0.6 * (-t / 0.04).exp());
+            v.phases[0] = (v.phases[0] + f / sr).fract();
+            (TAU * v.phases[0]).sin() * (-t / (0.35 * d)).exp() * 0.9
+        }
+        InstrumentKind::Bass808 => {
+            let env = adsr(v, t, sr, p.attack, p.decay, p.sustain, p.release);
+            let target = v.key as f32;
+            v.pitch = if p.glide > 0.001 {
+                target + (v.glide_from - target) * (-t / p.glide).exp()
+            } else {
+                target
+            };
+            let f = midi_hz(v.pitch) * (1.0 + 1.5 * p.bright * (-t / 0.012).exp());
+            v.phases[0] = (v.phases[0] + f / sr).fract();
+            let k = 1.0 + p.drive * 8.0;
+            ((TAU * v.phases[0]).sin() * k).tanh() / k.tanh() * env * 0.8
+        }
+        InstrumentKind::EPiano => {
+            let env = adsr(v, t, sr, p.attack, p.decay, p.sustain, p.release);
+            let f = midi_hz(v.key as f32);
+            v.phases[0] = (v.phases[0] + f / sr).fract();
+            v.phases[1] = (v.phases[1] + f * 14.0 / sr).fract();
+            let idx = 0.2 + p.bright * 2.5 * (-t / 0.5).exp();
+            let m = (TAU * v.phases[0]).sin();
+            let tine = (TAU * v.phases[1]).sin() * (-t / 0.04).exp() * 0.3 * p.bright;
+            let s =
+                plugins::saturate((TAU * v.phases[0] + idx * m).sin() + tine, p.drive) * env * 0.35;
+            let trem = p.spread * 0.5 * (TAU * 4.5 * t).sin();
+            return [s * (1.0 + trem), s * (1.0 - trem)];
+        }
+        InstrumentKind::Supersaw | InstrumentKind::Strings => {
+            let env = adsr(v, t, sr, p.attack, p.decay, p.sustain, p.release);
+            let vib = if v.kind == InstrumentKind::Strings {
+                0.08 * (TAU * 5.0 * t).sin() * (t / 0.6).min(1.0)
+            } else {
+                0.0
+            };
+            let (mut l, mut rr) = (0.0, 0.0);
+            for j in 0..7 {
+                let o = (j as f32 - 3.0) / 3.0;
+                let f = midi_hz(v.key as f32 + vib + o * p.spread * 0.35);
+                v.phases[j] = (v.phases[j] + f / sr).fract();
+                let s = v.phases[j] * 2.0 - 1.0;
+                l += s * (0.5 - o * 0.4);
+                rr += s * (0.5 + o * 0.4);
+            }
+            let l = plugins::saturate(v.filt.process(l).low, p.drive);
+            let rr = plugins::saturate(v.filt2.process(rr).low, p.drive);
+            return [l * env * 0.2, rr * env * 0.2];
+        }
+        InstrumentKind::Organ => {
+            const H: [(f32, f32); 7] = [
+                (0.5, 0.8),
+                (1.0, 1.0),
+                (1.5, 0.5),
+                (2.0, 0.7),
+                (3.0, 0.4),
+                (4.0, 0.3),
+                (8.0, 0.2),
+            ];
+            let env = adsr(v, t, sr, p.attack, p.decay, p.sustain, p.release);
+            let f = midi_hz(v.key as f32);
+            let vib = 1.0 + 0.003 * p.spread * (TAU * 6.5 * t).sin();
+            let mut s = 0.0;
+            for (j, (h, a)) in H.iter().enumerate() {
+                v.phases[j] = (v.phases[j] + f * h * vib / sr).fract();
+                let a = if *h > 2.0 { a * p.bright } else { *a };
+                s += (TAU * v.phases[j]).sin() * a;
+            }
+            let s = (s * 0.25 * (1.0 + p.drive * 3.0)).tanh() * env * 0.4;
+            let rot = 0.3 * p.spread * (TAU * 6.5 * t).sin();
+            return [s * (1.0 + rot), s * (1.0 - rot)];
+        }
+        InstrumentKind::Guitar => {
+            let n = v.buf.len();
+            if n == 0 {
+                v.done = true;
+                return [0.0; 2];
+            }
+            let env = adsr(v, t, sr, p.attack, 0.0, 1.0, p.release);
+            let i = v.bidx;
+            let j = (i + 1) % n;
+            let fb = 0.99 + 0.0095 * (p.decay / 4.0).min(1.0);
+            let a = 0.5 - 0.4 * p.bright;
+            let y = v.buf[i];
+            v.buf[i] = fb * ((1.0 - a) * v.buf[i] + a * v.buf[j]);
+            v.bidx = j;
+            if t > 12.0 {
+                v.done = true;
+            }
+            let k = 1.0 + p.drive * 12.0;
+            (y * k).tanh() / k.tanh() * env * 0.5
+        }
         InstrumentKind::Kick => {
             let f = r * (48.0 + (90.0 + 220.0 * tone) * (-t / 0.035).exp());
             v.phases[0] = (v.phases[0] + f / sr).fract();
@@ -594,4 +814,8 @@ mod tests {
         e.render(&mut buf);
         assert!(rms(&buf[buf.len() - 4410..]) < 1e-3);
     }
+}
+
+fn midi_hz(k: f32) -> f32 {
+    440.0 * 2f32.powf((k - 69.0) / 12.0)
 }

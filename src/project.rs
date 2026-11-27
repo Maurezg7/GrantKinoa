@@ -19,18 +19,49 @@ pub enum InstrumentKind {
     Clap,
     Synth,
     Sampler,
+    Rim,
+    Shaker,
+    Tom,
+    Bass808,
+    EPiano,
+    Supersaw,
+    Strings,
+    Organ,
+    Guitar,
 }
 
 impl InstrumentKind {
-    pub const ALL: [InstrumentKind; 7] = [
+    pub const ALL: [InstrumentKind; 16] = [
         InstrumentKind::Kick,
         InstrumentKind::Snare,
         InstrumentKind::HiHat,
         InstrumentKind::OpenHat,
         InstrumentKind::Clap,
+        InstrumentKind::Rim,
+        InstrumentKind::Shaker,
+        InstrumentKind::Tom,
         InstrumentKind::Synth,
         InstrumentKind::Sampler,
+        InstrumentKind::Bass808,
+        InstrumentKind::EPiano,
+        InstrumentKind::Supersaw,
+        InstrumentKind::Strings,
+        InstrumentKind::Organ,
+        InstrumentKind::Guitar,
     ];
+
+    /// Instrumentos melódicos con su propio motor (usan `ToneParams`).
+    pub fn is_plugin(self) -> bool {
+        matches!(
+            self,
+            InstrumentKind::Bass808
+                | InstrumentKind::EPiano
+                | InstrumentKind::Supersaw
+                | InstrumentKind::Strings
+                | InstrumentKind::Organ
+                | InstrumentKind::Guitar
+        )
+    }
 
     pub fn label(self) -> &'static str {
         match self {
@@ -41,6 +72,15 @@ impl InstrumentKind {
             InstrumentKind::Clap => "Palmas",
             InstrumentKind::Synth => "Sintetizador",
             InstrumentKind::Sampler => "Sampler",
+            InstrumentKind::Rim => "Rimshot",
+            InstrumentKind::Shaker => "Shaker",
+            InstrumentKind::Tom => "Tom",
+            InstrumentKind::Bass808 => "Kinoa 808",
+            InstrumentKind::EPiano => "Kinoa Keys (piano eléctrico)",
+            InstrumentKind::Supersaw => "Kinoa Supersaw",
+            InstrumentKind::Strings => "Kinoa Strings",
+            InstrumentKind::Organ => "Kinoa Organ",
+            InstrumentKind::Guitar => "Kinoa Guitar",
         }
     }
 }
@@ -165,6 +205,52 @@ impl Default for SamplerParams {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ToneParams {
+    pub attack: f32,
+    pub decay: f32,
+    pub sustain: f32,
+    pub release: f32,
+    /// Brillo / timbre (0..1).
+    pub bright: f32,
+    /// Saturación (0..1).
+    pub drive: f32,
+    /// Desafinación, ancho estéreo o modulación (0..1).
+    pub spread: f32,
+    /// Glide en segundos (sólo 808).
+    pub glide: f32,
+}
+
+impl Default for ToneParams {
+    fn default() -> Self {
+        Self::for_kind(InstrumentKind::Supersaw)
+    }
+}
+
+impl ToneParams {
+    pub fn for_kind(kind: InstrumentKind) -> Self {
+        let t = |attack, decay, sustain, release, bright, drive, spread, glide| Self {
+            attack,
+            decay,
+            sustain,
+            release,
+            bright,
+            drive,
+            spread,
+            glide,
+        };
+        match kind {
+            InstrumentKind::Bass808 => t(0.002, 1.6, 0.0, 0.2, 0.5, 0.25, 0.0, 0.06),
+            InstrumentKind::EPiano => t(0.002, 1.8, 0.25, 0.35, 0.5, 0.1, 0.4, 0.0),
+            InstrumentKind::Strings => t(0.45, 0.5, 0.85, 0.9, 0.35, 0.0, 0.5, 0.0),
+            InstrumentKind::Organ => t(0.005, 0.1, 1.0, 0.08, 0.6, 0.2, 0.5, 0.0),
+            InstrumentKind::Guitar => t(0.001, 3.0, 1.0, 0.15, 0.6, 0.0, 0.0, 0.0),
+            _ => t(0.01, 0.4, 0.75, 0.35, 0.65, 0.0, 0.5, 0.0),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Instrument {
     pub kind: InstrumentKind,
     #[serde(default)]
@@ -173,6 +259,8 @@ pub struct Instrument {
     pub synth: SynthParams,
     #[serde(default)]
     pub sampler: SamplerParams,
+    #[serde(default)]
+    pub tone: ToneParams,
 }
 
 impl Instrument {
@@ -182,6 +270,7 @@ impl Instrument {
             drum: DrumParams::default(),
             synth: SynthParams::default(),
             sampler: SamplerParams::default(),
+            tone: ToneParams::for_kind(kind),
         }
     }
 }
@@ -248,7 +337,35 @@ pub struct Clip {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FxParams {
+    pub eq_on: bool,
+    /// Ganancias en dB: grave, medio, agudo.
+    pub eq: [f32; 3],
+    pub sat_on: bool,
+    pub sat_drive: f32,
+    pub crush_on: bool,
+    pub crush_bits: f32,
+    pub crush_down: f32,
+    pub comp_on: bool,
+    pub comp_thresh: f32,
+    pub comp_ratio: f32,
+    pub comp_attack: f32,
+    pub comp_release: f32,
+    pub comp_makeup: f32,
+    /// Insert que dispara el sidechain (0 = apagado).
+    pub sc_source: usize,
+    pub sc_depth: f32,
+    pub chorus_on: bool,
+    pub chorus_rate: f32,
+    pub chorus_depth: f32,
+    pub chorus_mix: f32,
+    pub phaser_on: bool,
+    pub phaser_rate: f32,
+    pub phaser_depth: f32,
+    pub phaser_mix: f32,
+    pub limiter_on: bool,
+    pub limiter_ceiling: f32,
     pub filter_on: bool,
     pub cutoff: f32,
     pub resonance: f32,
@@ -265,6 +382,31 @@ pub struct FxParams {
 impl Default for FxParams {
     fn default() -> Self {
         Self {
+            eq_on: false,
+            eq: [0.0; 3],
+            sat_on: false,
+            sat_drive: 0.3,
+            crush_on: false,
+            crush_bits: 8.0,
+            crush_down: 2.0,
+            comp_on: false,
+            comp_thresh: -18.0,
+            comp_ratio: 4.0,
+            comp_attack: 5.0,
+            comp_release: 120.0,
+            comp_makeup: 3.0,
+            sc_source: 0,
+            sc_depth: 0.6,
+            chorus_on: false,
+            chorus_rate: 0.8,
+            chorus_depth: 0.5,
+            chorus_mix: 0.5,
+            phaser_on: false,
+            phaser_rate: 0.3,
+            phaser_depth: 0.6,
+            phaser_mix: 0.5,
+            limiter_on: false,
+            limiter_ceiling: -0.3,
             filter_on: false,
             cutoff: 8000.0,
             resonance: 0.1,
@@ -299,6 +441,9 @@ pub struct Project {
     pub clips: Vec<Clip>,
     pub mixer: Vec<MixerTrack>,
     pub next_channel_id: u32,
+    /// Swing de semicorcheas (0..0.75).
+    #[serde(default)]
+    pub swing: f32,
 }
 
 pub const PALETTE: [[u8; 3]; 8] = [
@@ -344,6 +489,7 @@ impl Project {
             clips: Vec::new(),
             mixer,
             next_channel_id: 1,
+            swing: 0.0,
         }
     }
 
@@ -465,6 +611,14 @@ impl Project {
         let max_id = self.channels.iter().map(|c| c.id).max().unwrap_or(0);
         self.next_channel_id = self.next_channel_id.max(max_id + 1);
         self.bpm = self.bpm.clamp(20.0, 300.0);
+        self.swing = if self.swing.is_finite() {
+            self.swing.clamp(0.0, 0.75)
+        } else {
+            0.0
+        };
+        for m in &mut self.mixer {
+            m.fx.sc_source = m.fx.sc_source.min(MIXER_INSERTS);
+        }
     }
 
     pub fn demo() -> Self {
