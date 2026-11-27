@@ -62,13 +62,13 @@ impl Biquad {
 #[derive(Default)]
 pub struct Eq3 {
     f: [[Biquad; 3]; 2],
-    key: [f32; 3],
+    key: Option<[f32; 3]>,
 }
 
 impl Eq3 {
     pub fn process(&mut self, x: [f32; 2], g: [f32; 3], sr: f32) -> [f32; 2] {
-        if g != self.key {
-            self.key = g;
+        if self.key != Some(g) {
+            self.key = Some(g);
             for ch in &mut self.f {
                 ch[0].set(0, 120.0, g[0], sr);
                 ch[1].set(1, 1000.0, g[1], sr);
@@ -250,5 +250,15 @@ mod tests {
             last = e.process([0.5, 0.5], [0.0; 3], 44100.0);
         }
         assert!((last[0] - 0.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn eq_low_shelf_boosts_dc() {
+        let mut e = Eq3::default();
+        let mut last = [0.0; 2];
+        for _ in 0..20000 {
+            last = e.process([0.25, 0.25], [6.0, 0.0, 0.0], 44100.0);
+        }
+        assert!((last[0] / 0.25 - db(6.0)).abs() < 0.05, "{}", last[0] / 0.25);
     }
 }

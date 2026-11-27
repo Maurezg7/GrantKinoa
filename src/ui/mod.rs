@@ -9,6 +9,7 @@ use crate::audio::Audio;
 use crate::engine::{Cmd, PlayMode, SampleData};
 use crate::export;
 use crate::project::*;
+use crate::templates::Genre;
 use crossbeam_channel::Receiver;
 use egui::{Context, Key, RichText};
 use egui_file_dialog::FileDialog;
@@ -32,6 +33,7 @@ enum Pending {
     New,
     Open,
     Demo,
+    Template(Genre),
     Quit,
 }
 
@@ -224,6 +226,7 @@ impl GrantKinoa {
             Pending::New => self.new_project(),
             Pending::Open => self.open_dialog(DialogPurpose::Open),
             Pending::Demo => self.replace_project(Project::demo(), None),
+            Pending::Template(g) => self.replace_project(Project::template(g), None),
             Pending::Quit => {
                 self.quit_ok = true;
                 self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -516,6 +519,14 @@ impl GrantKinoa {
                     self.guard(Pending::Demo);
                     ui.close();
                 }
+                ui.menu_button("Nuevo desde plantilla", |ui| {
+                    for g in Genre::ALL {
+                        if ui.button(g.label()).clicked() {
+                            self.guard(Pending::Template(g));
+                            ui.close();
+                        }
+                    }
+                });
                 ui.separator();
                 if ui.button("Guardar   Ctrl+S").clicked() {
                     self.save();

@@ -6,6 +6,7 @@ mod engine;
 mod export;
 mod plugins;
 mod project;
+mod templates;
 mod ui;
 
 use std::collections::HashMap;
