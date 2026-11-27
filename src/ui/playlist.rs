@@ -185,6 +185,7 @@ impl GrantKinoa {
             }
             if over
                 && sec_down
+                && p.x > gx
                 && p.y > gy
                 && let Some(i) = hit
             {

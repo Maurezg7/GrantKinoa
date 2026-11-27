@@ -251,9 +251,9 @@ impl Engine {
 
     fn sequence(&mut self, frames: usize) {
         let sps = self.steps_per_sample();
-        let from = self.pos;
-        let to = from + frames as f64 * sps;
         let len = self.loop_len();
+        let from = if self.pos >= len { 0.0 } else { self.pos };
+        let to = from + frames as f64 * sps;
         if to >= len {
             self.collect(from, len);
             if self.looping {
@@ -343,10 +343,10 @@ impl Engine {
             let bus = ch.mixer.min(MIXER_INSERTS) * BLOCK;
             let sample = self.samples.get(&v.ch).cloned();
             for i in 0..n {
-                let s = render_voice(v, &ch.instrument, sample.as_deref(), sr) * v.vel;
+                let s = render_voice(v, &ch.instrument, sample.as_deref(), sr);
                 let b = &mut self.buses[bus + i];
-                b[0] += s * gains[0];
-                b[1] += s * gains[1];
+                b[0] += s[0] * v.vel * gains[0];
+                b[1] += s[1] * v.vel * gains[1];
                 if v.done {
                     break;
                 }
@@ -419,7 +419,7 @@ fn render_voice(
     inst: &crate::project::Instrument,
     sample: Option<&SampleData>,
     sr: f32,
-) -> f32 {
+) -> [f32; 2] {
     let t = v.t as f32 / sr;
     v.t += 1;
     if let Some(g) = v.gate.as_mut() {
@@ -435,7 +435,7 @@ fn render_voice(
     let d = inst.drum.decay.max(0.05);
     let tone = inst.drum.tone;
     let r = 2f32.powf((inst.drum.tune + v.key as f32 - DEFAULT_KEY as f32) / 12.0);
-    match v.kind {
+    let mono = match v.kind {
         InstrumentKind::Kick => {
             let f = r * (48.0 + (90.0 + 220.0 * tone) * (-t / 0.035).exp());
             v.phases[0] = (v.phases[0] + f / sr).fract();
@@ -504,7 +504,7 @@ fn render_voice(
         InstrumentKind::Sampler => {
             let Some(smp) = sample.filter(|s| !s.frames.is_empty()) else {
                 v.done = true;
-                return 0.0;
+                return [0.0; 2];
             };
             let p = &inst.sampler;
             let env = adsr(v, t, sr, p.attack, 0.0, 1.0, p.release);
@@ -512,7 +512,7 @@ fn render_voice(
             let i = v.spos as usize;
             if i + 1 >= smp.frames.len() {
                 v.done = true;
-                return 0.0;
+                return [0.0; 2];
             }
             let frac = (v.spos - i as f64) as f32;
             let a = smp.frames[i];
@@ -520,9 +520,10 @@ fn render_voice(
             v.spos += rate;
             let l = a[0] + (b[0] - a[0]) * frac;
             let rr = a[1] + (b[1] - a[1]) * frac;
-            (l + rr) * 0.5 * env
+            return [l * env, rr * env];
         }
-    }
+    };
+    [mono, mono]
 }
 
 fn adsr(v: &mut Voice, t: f32, sr: f32, a: f32, d: f32, s: f32, r: f32) -> f32 {

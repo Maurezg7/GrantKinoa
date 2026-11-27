@@ -241,12 +241,16 @@ impl GrantKinoa {
                 i.pointer.any_down(),
             )
         });
-        let hit = pointer.filter(|p| rect.contains(*p)).and_then(|p| {
-            (0..len).find(|&i| {
-                let x = rect.left() + step_x(i);
-                p.x >= x && p.x < x + STEP_W + STEP_GAP
-            })
-        });
+        let reachable =
+            resp.contains_pointer() || (self.rack.paint.is_some() && !pressed && !sec_pressed);
+        let hit = pointer
+            .filter(|p| reachable && rect.contains(*p))
+            .and_then(|p| {
+                (0..len).find(|&i| {
+                    let x = rect.left() + step_x(i);
+                    p.x >= x && p.x < x + STEP_W + STEP_GAP
+                })
+            });
         if let Some(i) = hit {
             if pressed {
                 self.rack.paint = Some(!cp.steps[i]);
@@ -259,7 +263,7 @@ impl GrantKinoa {
             }
         }
 
-        for i in 0..len {
+        for (i, &on) in cp.steps.iter().enumerate().take(len) {
             let x = rect.left() + step_x(i);
             let r = Rect::from_min_size(pos2(x, rect.top()), vec2(STEP_W, rect.height()));
             let base = if (i / 4) % 2 == 0 {
@@ -267,13 +271,13 @@ impl GrantKinoa {
             } else {
                 Color32::from_rgb(96, 66, 70)
             };
-            let fill = if cp.steps[i] {
+            let fill = if on {
                 Color32::from_rgb(222, 226, 230)
             } else {
                 base
             };
             painter.rect_filled(r, 3.0, fill);
-            if cp.steps[i] {
+            if on {
                 painter.rect_filled(
                     Rect::from_min_size(r.left_top() + vec2(3.0, 3.0), vec2(STEP_W - 6.0, 3.0)),
                     1.0,

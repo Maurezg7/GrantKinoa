@@ -280,7 +280,11 @@ impl GrantKinoa {
             self.preview(preview);
         }
 
-        let notes = &self.project.patterns[pat_idx].channels[&id].notes;
+        let notes = self.project.patterns[pat_idx]
+            .channels
+            .get(&id)
+            .map(|c| c.notes.as_slice())
+            .unwrap_or(&[]);
         for n in notes {
             let r = Rect::from_min_size(
                 pos2(grid.left() + n.start * sw + 1.0, key_y(n.key) + 1.0),

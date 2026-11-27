@@ -5,6 +5,8 @@ pub const STEPS_PER_BAR: u32 = 16;
 pub const PLAYLIST_TRACKS: usize = 16;
 pub const MIXER_INSERTS: usize = 8;
 pub const DEFAULT_KEY: u8 = 60;
+pub const MAX_PATTERN_STEPS: u32 = 256;
+pub const MAX_SONG_STEPS: u32 = 999 * STEPS_PER_BAR;
 
 pub type SynthPreset = (&'static str, fn() -> SynthParams);
 
@@ -383,6 +385,31 @@ impl Project {
     }
 
     pub fn add_pattern(&mut self) -> usize {
+        for p in &mut self.patterns {
+            p.length = p.length.clamp(1, MAX_PATTERN_STEPS);
+            let len = p.length as usize;
+            for cp in p.channels.values_mut() {
+                cp.steps.resize(len, false);
+                cp.notes.retain(|n| {
+                    n.start.is_finite()
+                        && n.len.is_finite()
+                        && n.start >= 0.0
+                        && n.start < len as f32
+                });
+                for n in &mut cp.notes {
+                    n.len = n.len.clamp(0.25, len as f32 - n.start);
+                    n.key = n.key.min(127);
+                    n.vel = if n.vel.is_finite() {
+                        n.vel.clamp(0.0, 1.0)
+                    } else {
+                        0.8
+                    };
+                }
+            }
+        }
+        for c in &mut self.clips {
+            c.start = c.start.min(MAX_SONG_STEPS);
+        }
         let n = self.patterns.len();
         self.patterns.push(Pattern::new(
             format!("Pattern {}", n + 1),

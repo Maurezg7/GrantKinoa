@@ -27,6 +27,14 @@ enum DialogPurpose {
     Sample(u32),
 }
 
+#[derive(Clone, Copy)]
+enum Pending {
+    New,
+    Open,
+    Demo,
+    Quit,
+}
+
 pub struct GrantKinoa {
     project: Project,
     sent: Arc<Project>,
@@ -53,6 +61,10 @@ pub struct GrantKinoa {
     meters: Vec<[f32; 2]>,
     held_key: Option<(u32, u8)>,
     export_rx: Option<Receiver<Result<PathBuf, String>>>,
+    saved: String,
+    pending: Option<Pending>,
+    quit_ok: bool,
+    ctx: Context,
 }
 
 impl GrantKinoa {
@@ -88,10 +100,15 @@ impl GrantKinoa {
             meters: vec![[0.0; 2]; MIXER_INSERTS + 1],
             held_key: None,
             export_rx: None,
+            saved: String::new(),
+            pending: None,
+            quit_ok: false,
+            ctx: cc.egui_ctx.clone(),
         };
         if let Some(p) = open {
             app.open_project(&p);
         }
+        app.mark_saved();
         app
     }
 
@@ -166,6 +183,75 @@ impl GrantKinoa {
         self.path = path;
         self.set_pattern(0);
         self.sync();
+        self.mark_saved();
+    }
+
+    fn mark_saved(&mut self) {
+        self.saved = serde_json::to_string(&self.project).unwrap_or_default();
+    }
+
+    fn is_dirty(&self) -> bool {
+        serde_json::to_string(&self.project).is_ok_and(|s| s != self.saved)
+    }
+
+    fn guard(&mut self, action: Pending) {
+        if self.is_dirty() {
+            self.pending = Some(action);
+        } else {
+            self.run_pending(action);
+        }
+    }
+
+    fn run_pending(&mut self, action: Pending) {
+        match action {
+            Pending::New => self.new_project(),
+            Pending::Open => self.open_dialog(DialogPurpose::Open),
+            Pending::Demo => self.replace_project(Project::demo(), None),
+            Pending::Quit => {
+                self.quit_ok = true;
+                self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    fn unsaved_modal(&mut self, ctx: &Context) {
+        let Some(action) = self.pending else { return };
+        let mut choice = None;
+        egui::Modal::new(egui::Id::unique("unsaved")).show(ctx, |ui| {
+            ui.set_width(320.0);
+            ui.heading("Cambios sin guardar");
+            ui.label(format!(
+                "¿Guardar los cambios de \"{}\"?",
+                self.project.name
+            ));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Guardar").clicked() {
+                    choice = Some(0);
+                }
+                if ui.button("No guardar").clicked() {
+                    choice = Some(1);
+                }
+                if ui.button("Cancelar").clicked() {
+                    choice = Some(2);
+                }
+            });
+        });
+        match choice {
+            Some(0) => {
+                self.pending = None;
+                self.save();
+                if !self.is_dirty() {
+                    self.run_pending(action);
+                }
+            }
+            Some(1) => {
+                self.pending = None;
+                self.run_pending(action);
+            }
+            Some(2) => self.pending = None,
+            _ => {}
+        }
     }
 
     fn open_project(&mut self, path: &Path) {
@@ -185,11 +271,12 @@ impl GrantKinoa {
         let path = with_ext(path, "gkp");
         let res = serde_json::to_string_pretty(&self.project)
             .map_err(|e| e.to_string())
-            .and_then(|s| std::fs::write(&path, s).map_err(|e| e.to_string()));
+            .and_then(|s| write_atomic(&path, s.as_bytes()).map_err(|e| e.to_string()));
         match res {
             Ok(()) => {
                 self.status = format!("Guardado {}", path.display());
                 self.path = Some(path);
+                self.mark_saved();
             }
             Err(e) => self.status = format!("No se pudo guardar: {e}"),
         }
@@ -203,6 +290,10 @@ impl GrantKinoa {
     }
 
     fn start_export(&mut self, path: &Path) {
+        if self.export_rx.is_some() {
+            self.status = "Ya hay una exportación en curso".into();
+            return;
+        }
         let path = with_ext(path, "wav");
         let project = self.project.clone();
         let samples = self.samples.clone();
@@ -366,10 +457,10 @@ impl GrantKinoa {
             self.save();
         }
         if ctrl_o {
-            self.open_dialog(DialogPurpose::Open);
+            self.guard(Pending::Open);
         }
         if ctrl_n {
-            self.new_project();
+            self.guard(Pending::New);
         }
     }
 
@@ -377,15 +468,15 @@ impl GrantKinoa {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("Archivo", |ui| {
                 if ui.button("Nuevo proyecto   Ctrl+N").clicked() {
-                    self.new_project();
+                    self.guard(Pending::New);
                     ui.close();
                 }
                 if ui.button("Abrir…   Ctrl+O").clicked() {
-                    self.open_dialog(DialogPurpose::Open);
+                    self.guard(Pending::Open);
                     ui.close();
                 }
                 if ui.button("Abrir demo").clicked() {
-                    self.replace_project(Project::demo(), None);
+                    self.guard(Pending::Demo);
                     ui.close();
                 }
                 ui.separator();
@@ -635,6 +726,11 @@ impl GrantKinoa {
 impl eframe::App for GrantKinoa {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_ok && self.is_dirty() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.pending = Some(Pending::Quit);
+        }
+        self.unsaved_modal(&ctx);
         self.handle_keys(&ctx);
         self.poll_export();
         for (i, m) in self.meters.iter_mut().enumerate() {
@@ -715,4 +811,14 @@ fn setup_style(ctx: &Context) {
         s.spacing.item_spacing = egui::vec2(6.0, 4.0);
         s.spacing.button_padding = egui::vec2(6.0, 2.0);
     });
+}
+
+fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, data)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
