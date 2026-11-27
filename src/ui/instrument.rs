@@ -42,10 +42,12 @@ impl GrantKinoa {
                 egui::ComboBox::from_id_salt("inst_kind")
                     .selected_text(ch.instrument.kind.label())
                     .show_ui(ui, |ui| {
+                        let prev = ch.instrument.kind;
                         for k in InstrumentKind::ALL {
                             if ui
                                 .selectable_value(&mut ch.instrument.kind, k, k.label())
                                 .clicked()
+                                && k != prev
                             {
                                 ch.instrument.tone = ToneParams::for_kind(k);
                             }
