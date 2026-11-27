@@ -611,6 +611,9 @@ impl GrantKinoa {
                     .speed(0.5)
                     .fixed_decimals(1),
             );
+            labeled(ui, "Swing", |ui| {
+                knob(ui, &mut self.project.swing, 0.0, 0.75, 0.0, "Swing")
+            });
             ui.separator();
             ui.label("Pattern");
             let mut pat = self.pattern;
@@ -667,7 +670,7 @@ impl GrantKinoa {
                 .default_open(true)
                 .show(ui, |ui| {
                     for kind in InstrumentKind::ALL {
-                        if kind == InstrumentKind::Synth {
+                        if kind == InstrumentKind::Synth || kind.is_plugin() {
                             continue;
                         }
                         if ui
@@ -680,6 +683,16 @@ impl GrantKinoa {
                                 let id = self.selected.unwrap();
                                 self.instrument_win = Some(id);
                             }
+                        }
+                    }
+                });
+            egui::CollapsingHeader::new("Plugins GrantKinoa")
+                .default_open(true)
+                .show(ui, |ui| {
+                    for kind in InstrumentKind::ALL.into_iter().filter(|k| k.is_plugin()) {
+                        if ui.button(kind.label()).on_hover_text(kind.hint()).clicked() {
+                            let name = kind.label().split(" (").next().unwrap_or("");
+                            self.add_instrument(name, Instrument::new(kind));
                         }
                     }
                 });

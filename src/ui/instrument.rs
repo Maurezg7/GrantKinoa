@@ -43,7 +43,12 @@ impl GrantKinoa {
                     .selected_text(ch.instrument.kind.label())
                     .show_ui(ui, |ui| {
                         for k in InstrumentKind::ALL {
-                            ui.selectable_value(&mut ch.instrument.kind, k, k.label());
+                            if ui
+                                .selectable_value(&mut ch.instrument.kind, k, k.label())
+                                .clicked()
+                            {
+                                ch.instrument.tone = ToneParams::for_kind(k);
+                            }
                         }
                     });
                 ui.end_row();
@@ -67,6 +72,7 @@ impl GrantKinoa {
             let inst = &mut ch.instrument;
             match inst.kind {
                 InstrumentKind::Synth => synth_ui(ui, &mut inst.synth),
+                k if k.is_plugin() => tone_ui(ui, k, &mut inst.tone),
                 InstrumentKind::Sampler => {
                     let s = &mut inst.sampler;
                     ui.horizontal(|ui| {
@@ -196,5 +202,58 @@ fn synth_ui(ui: &mut Ui, p: &mut SynthParams) {
         labeled(ui, "Envolvente", |ui| {
             knob(ui, &mut p.env_amount, 0.0, 1.0, 0.4, "Envolvente → filtro")
         });
+    });
+}
+
+fn tone_ui(ui: &mut Ui, kind: InstrumentKind, p: &mut ToneParams) {
+    ui.label(RichText::new(kind.hint()).small().color(TEXT_DIM));
+    let d = ToneParams::for_kind(kind);
+    ui.horizontal(|ui| {
+        labeled(ui, "Ataque", |ui| {
+            knob(ui, &mut p.attack, 0.0, 2.0, d.attack, "Ataque (s)")
+        });
+        if kind != InstrumentKind::Guitar {
+            labeled(ui, "Decay", |ui| {
+                knob(ui, &mut p.decay, 0.01, 4.0, d.decay, "Decay (s)")
+            });
+            labeled(ui, "Sustain", |ui| {
+                knob(ui, &mut p.sustain, 0.0, 1.0, d.sustain, "Sustain")
+            });
+        } else {
+            labeled(ui, "Sustain", |ui| {
+                knob(ui, &mut p.decay, 0.0, 4.0, d.decay, "Duración de la cuerda")
+            });
+        }
+        labeled(ui, "Release", |ui| {
+            knob(ui, &mut p.release, 0.0, 3.0, d.release, "Release (s)")
+        });
+    });
+    let spread = match kind {
+        InstrumentKind::EPiano => "Trémolo",
+        InstrumentKind::Organ => "Rotativo",
+        InstrumentKind::Supersaw | InstrumentKind::Strings => "Ancho",
+        _ => "",
+    };
+    ui.horizontal(|ui| {
+        let bright = match kind {
+            InstrumentKind::Bass808 => "Punch",
+            _ => "Brillo",
+        };
+        labeled(ui, bright, |ui| {
+            knob(ui, &mut p.bright, 0.0, 1.0, d.bright, bright)
+        });
+        labeled(ui, "Drive", |ui| {
+            knob(ui, &mut p.drive, 0.0, 1.0, d.drive, "Saturación")
+        });
+        if !spread.is_empty() {
+            labeled(ui, spread, |ui| {
+                knob(ui, &mut p.spread, 0.0, 1.0, d.spread, spread)
+            });
+        }
+        if kind == InstrumentKind::Bass808 {
+            labeled(ui, "Glide", |ui| {
+                knob(ui, &mut p.glide, 0.0, 0.5, d.glide, "Glide (s)")
+            });
+        }
     });
 }

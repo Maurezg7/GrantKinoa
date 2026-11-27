@@ -50,6 +50,22 @@ impl InstrumentKind {
         InstrumentKind::Guitar,
     ];
 
+    pub fn hint(self) -> &'static str {
+        match self {
+            InstrumentKind::Bass808 => {
+                "Bajo 808 monofónico con glide y saturación (trap, hip hop, reggaetón)"
+            }
+            InstrumentKind::EPiano => "Piano eléctrico FM con trémolo estéreo (R&B, neo-soul, pop)",
+            InstrumentKind::Supersaw => "7 osciladores desafinados en estéreo (pop, EDM)",
+            InstrumentKind::Strings => "Ensamble de cuerdas con vibrato (baladas, pop, R&B)",
+            InstrumentKind::Organ => "Órgano de drawbars con efecto rotativo (gospel, pop-rock)",
+            InstrumentKind::Guitar => {
+                "Guitarra por modelado físico con distorsión (pop-rock, reggae)"
+            }
+            _ => "Agregar al Channel Rack",
+        }
+    }
+
     /// Instrumentos melódicos con su propio motor (usan `ToneParams`).
     pub fn is_plugin(self) -> bool {
         matches!(
